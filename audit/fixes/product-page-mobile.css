@@ -1,0 +1,21 @@
+/* subbagsh: бүтээгдэхүүний хуудас — утсан дээр үнэ, товчийг зургийн дээр гаргах */
+@media (max-width: 781px){
+  .single-product main .wp-block-columns.alignwide{flex-direction:column-reverse;}
+}
+/* "Сагсанд хийх" товчийг тод, том болгох */
+.single-product .single_add_to_cart_button{
+  background:#f5c518 !important;color:#1a1a1a !important;border:0 !important;
+  border-radius:12px;padding:14px 28px !important;font-size:17px !important;font-weight:700;
+  min-height:52px;
+}
+@media (max-width: 781px){
+  .single-product form.cart{display:flex;}
+  .single-product .single_add_to_cart_button{flex:1;width:100%;}
+}
+/* галерейн жижиг зургуудыг нэг хэмжээтэй болгох (layout shift багасгах) */
+.single-product .woocommerce-product-gallery .flex-control-thumbs img{aspect-ratio:1/1;object-fit:cover;}
+.single-product .woocommerce-product-gallery__image img{aspect-ratio:1/1;object-fit:contain;background:#fff;}
+/* утсан дээр бүтээгдэхүүний гарчгийг жижигрүүлэх */
+@media (max-width: 781px){
+  .single-product h1.wp-block-post-title{font-size:24px !important;line-height:1.3;}
+}
