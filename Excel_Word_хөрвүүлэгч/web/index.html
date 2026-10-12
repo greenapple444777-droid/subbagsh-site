@@ -38,6 +38,7 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--font-body); }
 .wrap { max-width: 760px; margin: 0 auto; padding-inline: 16px; padding-block: 40px 64px; display: grid; gap: 28px; }
 
@@ -104,6 +105,11 @@ input[type=file] { display: none; }
 .state.wait { background: var(--xl-soft); color: var(--xl); }
 .state.done { background: var(--wd-soft); color: var(--wd); }
 .state.err { background: var(--err-soft); color: var(--err); }
+.item-tools { display: flex; align-items: center; gap: 8px; }
+.remove { font: 500 13px/1 var(--font-body); display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; border-radius: 4px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
+.remove:hover { border-color: var(--err); color: var(--err); background: var(--err-soft); }
+.remove:focus-visible { outline: 2px solid var(--err); outline-offset: 1px; }
+.queue-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; font-size: 14px; color: var(--muted); }
 .sheets { display: flex; flex-wrap: wrap; gap: 6px; }
 .sheet { font: 13px/1 var(--font-body); padding: 7px 10px; border-radius: 4px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
 .sheet[aria-pressed="true"] { border-color: var(--xl); background: var(--xl-soft); color: var(--xl); }
@@ -163,6 +169,10 @@ input[type=file] { display: none; }
     </div>
   </section>
 
+  <div class="queue-bar" id="queue-bar" hidden>
+    <span id="queue-count"></span>
+    <button class="remove" type="button" id="clear-all">✕ Бүгдийг устгах</button>
+  </div>
   <section class="queue" id="queue" aria-live="polite"></section>
 
   <section class="keeps">
@@ -240,6 +250,14 @@ input[type=file] { display: none; }
 
   function el(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
 
+  const bar = $("#queue-bar"), count = $("#queue-count");
+  function updateBar() {
+    const n = queue.children.length;
+    bar.hidden = n === 0;
+    count.textContent = "Оруулсан файл: " + n;
+  }
+  $("#clear-all").addEventListener("click", () => { queue.replaceChildren(); updateBar(); });
+
   function addFiles(list) {
     for (const f of list) addItem(f);
   }
@@ -249,9 +267,16 @@ input[type=file] { display: none; }
     const head = el("div", "item-head");
     const name = el("div", "fname", file.name);
     const state = el("span", "state wait", "Уншиж байна…");
-    head.append(name, state);
+    const tools = el("div", "item-tools");
+    const remove = el("button", "remove", "✕ Устгах");
+    remove.type = "button";
+    remove.setAttribute("aria-label", file.name + " файлыг жагсаалтаас устгах");
+    remove.addEventListener("click", () => { item.remove(); updateBar(); });
+    tools.append(state, remove);
+    head.append(name, tools);
     item.append(head);
     queue.prepend(item);
+    updateBar();
 
     if (!/\.(xlsx|xlsm)$/i.test(file.name)) {
       state.className = "state err"; state.textContent = "Дэмжихгүй";
