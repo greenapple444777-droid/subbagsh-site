@@ -77,7 +77,23 @@ input[type=file] { display: none; }
 
 .opts { display: flex; flex-wrap: wrap; gap: 10px 22px; font-size: 14px; }
 .opts label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
-.opts input { width: 17px; height: 17px; accent-color: var(--xl); }
+.opts input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--xl); }
+
+.page { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: grid; gap: 14px; }
+.page h2 { font: 500 13px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0; }
+.page-row { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: flex-start; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label { padding: 9px 13px; font-size: 14px; cursor: pointer; border-left: 1px solid var(--line); }
+.seg label:first-of-type { border-left: 0; }
+.seg input:checked + label { background: var(--xl-soft); color: var(--xl); font-weight: 600; }
+.seg input:focus-visible + label { outline: 2px solid var(--wd); outline-offset: -2px; }
+.margins { display: grid; grid-template-columns: repeat(4, minmax(0, 92px)); gap: 10px; }
+.margins label { display: grid; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.margins input { width: 100%; font: 500 15px/1 var(--font-mono); font-variant-numeric: tabular-nums; padding: 8px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.margins input:focus-visible { outline: 2px solid var(--xl); outline-offset: 0; }
+.unit { font-size: 12.5px; color: var(--muted); align-self: end; padding-bottom: 9px; }
+@media (max-width: 480px) { .margins { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .queue { display: grid; gap: 12px; }
 .queue:empty { display: none; }
@@ -122,10 +138,30 @@ input[type=file] { display: none; }
     <input type="file" id="file" accept=".xlsx,.xlsm" multiple>
   </div>
 
-  <div class="opts">
-    <label><input type="checkbox" id="opt-fit" checked> Хуудсанд багтахгүй бол жижигрүүлэх</label>
-    <label><input type="checkbox" id="opt-font" checked> Жижигрүүлэхдээ үсгийг ч жижигрүүлэх</label>
-  </div>
+  <section class="page" aria-label="Word хуудасны тохиргоо">
+    <h2>Word хуудас · A4</h2>
+    <div class="page-row">
+      <div class="seg" role="radiogroup" aria-label="Хуудасны чиглэл">
+        <input type="radio" name="orient" id="or-auto" value="auto" checked><label for="or-auto">Excel-ийнхээр</label>
+        <input type="radio" name="orient" id="or-portrait" value="portrait"><label for="or-portrait">Босоо</label>
+        <input type="radio" name="orient" id="or-landscape" value="landscape"><label for="or-landscape">Хөндлөн</label>
+      </div>
+    </div>
+    <div class="page-row">
+      <div class="margins">
+        <label for="m-left">Зүүн (урд)<input type="number" id="m-left" min="0" max="5" step="0.1" value="1.5"></label>
+        <label for="m-top">Дээд<input type="number" id="m-top" min="0" max="5" step="0.1" value="1.5"></label>
+        <label for="m-right">Баруун (хойд)<input type="number" id="m-right" min="0" max="5" step="0.1" value="0.5"></label>
+        <label for="m-bottom">Доод<input type="number" id="m-bottom" min="0" max="5" step="0.1" value="0.5"></label>
+      </div>
+      <span class="unit">см</span>
+    </div>
+    <div class="opts">
+      <label><input type="checkbox" id="opt-plain" checked> Хүрээгүй хэсгийг (гарчиг, бичвэр) хүснэгтгүй гаргах</label>
+      <label><input type="checkbox" id="opt-fit" checked> Хуудсанд багтахгүй бол жижигрүүлэх</label>
+      <label><input type="checkbox" id="opt-font" checked> Жижигрүүлэхдээ үсгийг ч жижигрүүлэх</label>
+    </div>
+  </section>
 
   <section class="queue" id="queue" aria-live="polite"></section>
 
@@ -141,7 +177,8 @@ input[type=file] { display: none; }
       <li>Босоо бичвэр, зэрэгцүүлэлт</li>
       <li>Тоо, хувь, огноо харагдах байдлаараа</li>
       <li>Хэвлэх муж, давтагдах гарчиг мөр</li>
-      <li>Хэвтээ/босоо хуудас, A4/A3, захын зай</li>
+      <li>A4 босоо/хөндлөн, захын зайг өөрөө тохируулна</li>
+      <li>Хүрээгүй гарчиг, бичвэр хүснэгтгүй гарна</li>
       <li>Нуусан мөр, багана орохгүй</li>
       <li class="no">Зураг, график орохгүй</li>
     </ul>
@@ -156,7 +193,33 @@ input[type=file] { display: none; }
 (function () {
   const $ = (s) => document.querySelector(s);
   const drop = $("#drop"), input = $("#file"), queue = $("#queue");
-  const optFit = $("#opt-fit"), optFont = $("#opt-font");
+  const optFit = $("#opt-fit"), optFont = $("#opt-font"), optPlain = $("#opt-plain");
+  const marginIds = ["left", "top", "right", "bottom"];
+  const DEFAULT_MARGINS = { left: 1.5, top: 1.5, right: 0.5, bottom: 0.5 };
+
+  // Сонголтыг дараагийн удаа санах (боломжгүй бол алгасна)
+  const PREF_KEY = "excel2word-prefs";
+  try {
+    const saved = JSON.parse(localStorage.getItem(PREF_KEY) || "null");
+    if (saved) {
+      const r = document.querySelector('input[name=orient][value="' + saved.orientation + '"]');
+      if (r) r.checked = true;
+      marginIds.forEach((k) => { if (saved.margins && saved.margins[k] != null) $("#m-" + k).value = saved.margins[k]; });
+      ["plain", "fit", "font"].forEach((k) => { if (typeof saved[k] === "boolean") $("#opt-" + k).checked = saved[k]; });
+    }
+  } catch (e) {}
+  function readPrefs() {
+    const margins = {};
+    marginIds.forEach((k) => {
+      const v = parseFloat(String($("#m-" + k).value).replace(",", "."));
+      margins[k] = isFinite(v) && v >= 0 ? Math.min(v, 10) : DEFAULT_MARGINS[k];
+    });
+    return { orientation: document.querySelector("input[name=orient]:checked").value, margins,
+      plain: optPlain.checked, fit: optFit.checked, font: optFont.checked };
+  }
+  document.querySelector(".page").addEventListener("change", () => {
+    try { localStorage.setItem(PREF_KEY, JSON.stringify(readPrefs())); } catch (e) {}
+  });
   let downloadsP = null;
   function downloads() {
     if (!downloadsP) {
@@ -227,8 +290,10 @@ input[type=file] { display: none; }
     go.addEventListener("click", async () => {
       go.disabled = true; go.textContent = "Хөрвүүлж байна…"; notes.replaceChildren();
       try {
+        const prefs = readPrefs();
         const res = await window.excelToWord(buf.slice(0), {
-          fit: optFit.checked, scaleFonts: optFont.checked,
+          fit: prefs.fit, scaleFonts: prefs.font, plainOutside: prefs.plain,
+          paper: "A4", orientation: prefs.orientation, margins: prefs.margins,
           sheets: names.filter((n) => chosen.has(n)),
         });
         res.log.forEach((l) => {

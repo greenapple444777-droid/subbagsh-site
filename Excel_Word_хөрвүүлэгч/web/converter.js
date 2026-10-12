@@ -196,13 +196,23 @@
     const cellAt = (r, c) => (r >= 1 && c >= 1 ? ws.findCell(r, c) : undefined);
 
     // Хуудасны тохиргоо
-    let [pw, ph] = PAPER[ps.paperSize] || PAPER[9];
-    const landscape = ps.orientation === "landscape";
+    // Цаас: opts.paper = "A4" бол үргэлж A4, үгүй бол Excel-ийнхээр
+    let [pw, ph] = opts.paper === "A4" ? PAPER[9] : PAPER[ps.paperSize] || PAPER[9];
+    const landscape = opts.orientation === "landscape" ? true
+      : opts.orientation === "portrait" ? false : ps.orientation === "landscape";
     if (landscape) [pw, ph] = [ph, pw];
-    const mg = ps.margins || {};
-    const tw = (v, d) => Math.round((v != null ? v : d) * 1440);
-    const margins = { left: tw(mg.left, 0.7), right: tw(mg.right, 0.7), top: tw(mg.top, 0.75),
-      bottom: tw(mg.bottom, 0.75), header: tw(mg.header, 0.3), footer: tw(mg.footer, 0.3) };
+    let margins;
+    if (opts.margins) {
+      // см → twip (1 см = 567 twip)
+      const cm = (v) => Math.round(Number(v) * 567);
+      margins = { left: cm(opts.margins.left), right: cm(opts.margins.right), top: cm(opts.margins.top),
+        bottom: cm(opts.margins.bottom), header: 0, footer: 0 };
+    } else {
+      const mg = ps.margins || {};
+      const tw = (v, d) => Math.round((v != null ? v : d) * 1440);
+      margins = { left: tw(mg.left, 0.7), right: tw(mg.right, 0.7), top: tw(mg.top, 0.75),
+        bottom: tw(mg.bottom, 0.75), header: tw(mg.header, 0.3), footer: tw(mg.footer, 0.3) };
+    }
     const usableW = pw - margins.left - margins.right;
     const usableH = ph - margins.top - margins.bottom;
 
@@ -322,7 +332,8 @@
       (i ? `<w:r>${rp}<w:br/></w:r>` : "") +
       (line ? `<w:r>${rp}<w:t xml:space="preserve">${esc(line)}</w:t></w:r>` : "")).join("");
 
-    const paragraph = (cell) => {
+    // Нүдний текстийг Word run болгоно
+    const cellText = (cell) => {
       const style = (cell && cell.style) || {};
       const font = style.font;
       const al = style.alignment || {};
@@ -345,10 +356,38 @@
       const isNum = typeof value === "number";
       let jc = H_ALIGN[al.horizontal];
       if (!jc) jc = isNum || value instanceof Date ? "right" : typeof value === "boolean" ? "center" : "left";
+      return { body, jc, baseRpr, indent: al.indent || 0 };
+    };
+    const paragraph = (cell) => {
+      const t = cellText(cell);
       let ind = "";
-      if (al.indent) ind = `<w:ind w:${jc === "right" ? "right" : "left"}="${Math.round(al.indent * 180 * fontScale)}"/>`;
+      if (t.indent) ind = `<w:ind w:${t.jc === "right" ? "right" : "left"}="${Math.round(t.indent * 180 * fontScale)}"/>`;
       return `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>${ind}` +
-        `<w:jc w:val="${jc}"/>${baseRpr}</w:pPr>${body}</w:p>`;
+        `<w:jc w:val="${t.jc}"/>${t.baseRpr}</w:pPr>${t.body}</w:p>`;
+    };
+
+    // Нүд бүрийн (merge тооцсон) хүрээ ба агуулгын нүд
+    const cellBox = (r, c, info) => {
+      let spanCols = [c], styleCell, bT, bB, bL, bR, contentCell;
+      if (info && info.start) {
+        const mr = info.mr;
+        spanCols = info.cols;
+        styleCell = cellAt(mr.minR, mr.minC);
+        bT = null; bB = null; bL = null; bR = null;
+        for (const cc of spanCols) bT = bT || edge(r, cc, "top");
+        const bottomRow = info.vmerge === "restart" ? mr.maxR : r;
+        for (const cc of spanCols) bB = bB || edge(bottomRow, cc, "bottom");
+        for (let rr = mr.minR; rr <= mr.maxR; rr++) {
+          bL = bL || edge(rr, mr.minC, "left");
+          bR = bR || edge(rr, mr.maxC, "right");
+        }
+        contentCell = info.top ? styleCell : null;
+      } else {
+        styleCell = cellAt(r, c);
+        bT = edge(r, c, "top"); bB = edge(r, c, "bottom"); bL = edge(r, c, "left"); bR = edge(r, c, "right");
+        contentCell = styleCell;
+      }
+      return { spanCols, styleCell, contentCell, bT, bB, bL, bR };
     };
 
     // Хэвлэх гарчиг мөр
@@ -357,7 +396,11 @@
     if (tm) for (let r = +tm[1]; r <= +tm[2]; r++) titleRows.add(r);
 
     const jcTbl = ps.horizontalCentered ? "center" : "left";
+    const tblOffset = jcTbl === "center" ? Math.max(0, Math.floor((usableW - tableW) / 2)) : 0;
+    const colLeft = {};
+    { let x = tblOffset; for (const c of cols) { colLeft[c] = x; x += colTw[c]; } }
     const mar = Math.round(30 * Math.max(scale, 0.5));
+
     const emit = (segRows) => {
       let headerOk = true;
       const x = [`<w:tbl><w:tblPr><w:tblW w:w="${tableW}" w:type="dxa"/><w:jc w:val="${jcTbl}"/>` +
@@ -372,25 +415,7 @@
         for (const c of cols) {
           const info = mergeAt.get(key(r, c));
           if (info && info.skip) continue;
-          let spanCols = [c], styleCell, bT, bB, bL, bR, contentCell;
-          if (info && info.start) {
-            const mr = info.mr;
-            spanCols = info.cols;
-            styleCell = cellAt(mr.minR, mr.minC);
-            bT = null; bB = null; bL = null; bR = null;
-            for (const cc of spanCols) bT = bT || edge(r, cc, "top");
-            const bottomRow = info.vmerge === "restart" ? mr.maxR : r;
-            for (const cc of spanCols) bB = bB || edge(bottomRow, cc, "bottom");
-            for (let rr = mr.minR; rr <= mr.maxR; rr++) {
-              bL = bL || edge(rr, mr.minC, "left");
-              bR = bR || edge(rr, mr.maxC, "right");
-            }
-            contentCell = info.top ? styleCell : null;
-          } else {
-            styleCell = cellAt(r, c);
-            bT = edge(r, c, "top"); bB = edge(r, c, "bottom"); bL = edge(r, c, "left"); bR = edge(r, c, "right");
-            contentCell = styleCell;
-          }
+          const { spanCols, styleCell, contentCell, bT, bB, bL, bR } = cellBox(r, c, info);
           const width = spanCols.reduce((s, cc) => s + colTw[cc], 0);
           let tcPr = `<w:tcW w:w="${width}" w:type="dxa"/>`;
           if (spanCols.length > 1) tcPr += `<w:gridSpan w:val="${spanCols.length}"/>`;
@@ -421,19 +446,89 @@
       return x.join("");
     };
 
-    // Давтагдах гарчиг хүснэгтийн эхэнд байх ёстой → өмнөх мөрүүдийг салгана
-    let segments = [rows];
-    if (titleRows.size) {
-      const first = Math.min(...titleRows);
-      const pre = rows.filter((r) => r < first);
-      const crosses = merges.some((mr) => mr.minR < first && first <= mr.maxR);
-      if (pre.length && pre.length < rows.length && !crosses) segments = [pre, rows.filter((r) => r >= first)];
+    // Хүрээгүй мөрийг хүснэгтгүй энгийн бичвэр болгоно. Нүд бүрийн байрлалыг
+    // догол (indent) болон tab-аар хадгална.
+    const lineRpr = rPr(null);
+    const emitPlain = (r) => {
+      const hTw = Math.max(1, Math.floor(rowH[r] * 20 * scale));
+      const items = [];
+      for (const c of cols) {
+        const info = mergeAt.get(key(r, c));
+        if (info && info.skip) continue;
+        if (info && info.start && !info.top) continue;
+        const spanCols = info && info.start ? info.cols : [c];
+        const cell = info && info.start ? cellAt(info.mr.minR, info.mr.minC) : cellAt(r, c);
+        if (!cell) continue;
+        const t = cellText(cell);
+        if (!t.body) continue;
+        const left = colLeft[spanCols[0]];
+        const right = left + spanCols.reduce((s, cc) => s + colTw[cc], 0);
+        items.push(Object.assign(t, { left, right }));
+      }
+      if (!items.length) {
+        return `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="${hTw}" w:lineRule="exact"/>` +
+          `<w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>`;
+      }
+      const spacing = `<w:spacing w:before="0" w:after="0" w:line="${hTw}" w:lineRule="atLeast"/>`;
+      if (items.length === 1) {
+        const it = items[0];
+        const indL = it.left + (it.jc !== "right" && it.indent ? Math.round(it.indent * 180 * fontScale) : 0);
+        const indR = Math.max(0, usableW - it.right);
+        return `<w:p><w:pPr>${spacing}<w:ind w:left="${indL}" w:right="${indR}"/>` +
+          `<w:jc w:val="${it.jc === "distribute" ? "both" : it.jc}"/>${it.baseRpr}</w:pPr>${it.body}</w:p>`;
+      }
+      // Олон нүд → нэг мөр, нүд бүр өөрийн байрлалд tab-аар
+      const first = items[0];
+      const tabs = items.slice(1).map((it) => it.jc === "right" ? `<w:tab w:val="right" w:pos="${it.right - first.left}"/>`
+        : it.jc === "center" ? `<w:tab w:val="center" w:pos="${Math.round((it.left + it.right) / 2) - first.left}"/>`
+        : `<w:tab w:val="left" w:pos="${it.left - first.left}"/>`);
+      const body = items.map((it, i) => (i ? `<w:r>${it.baseRpr}<w:tab/></w:r>` : "") + it.body).join("");
+      return `<w:p><w:pPr><w:tabs>${tabs.join("")}</w:tabs>${spacing}<w:ind w:left="${first.left}"/>` +
+        `<w:jc w:val="left"/>${first.baseRpr}</w:pPr>${body}</w:p>`;
+    };
+
+    // Мөр бүрийг "хүснэгт" эсвэл "энгийн" гэж ангилна
+    const isTableRow = {};
+    for (const r of rows) {
+      if (!opts.plainOutside) { isTableRow[r] = true; continue; }
+      let boxed = false;
+      for (const c of cols) {
+        const info = mergeAt.get(key(r, c));
+        if (info && info.skip) continue;
+        const b = cellBox(r, c, info);
+        if ((b.bL && b.bR) || (b.bT && b.bB)) { boxed = true; break; }
+      }
+      isTableRow[r] = boxed;
     }
+    // Нэгтгэсэн нүд хоёр төрлийн мөрийг огтолж болохгүй
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const mr of merges) {
+        const span = rows.filter((r) => r >= mr.minR && r <= mr.maxR);
+        if (span.some((r) => isTableRow[r]) && span.some((r) => !isTableRow[r])) {
+          span.forEach((r) => { isTableRow[r] = true; }); changed = true;
+        }
+      }
+    }
+
+    // Дараалсан хүснэгтийн мөрүүдийг нэг хүснэгт болгоно. Давтагдах гарчиг
+    // хүснэгтийн эхэнд байх ёстой тул гарчгийн өмнө салгана.
+    const firstTitle = titleRows.size ? Math.min(...titleRows) : null;
+    const canSplitAtTitle = firstTitle != null && !merges.some((mr) => mr.minR < firstTitle && firstTitle <= mr.maxR);
+    const parts = [];
+    let run = [];
+    const flush = () => { if (run.length) { parts.push({ type: "tbl", xml: emit(run) }); run = []; } };
+    for (const r of rows) {
+      if (!isTableRow[r]) { flush(); parts.push({ type: "p", xml: emitPlain(r) }); continue; }
+      if (r === firstTitle && canSplitAtTitle) flush();
+      run.push(r);
+    }
+    flush();
     const sectPr = `<w:sectPr><w:pgSz w:w="${pw}" w:h="${ph}"${landscape ? ' w:orient="landscape"' : ""}/>` +
       `<w:pgMar w:top="${margins.top}" w:right="${margins.right}" w:bottom="${margins.bottom}" ` +
       `w:left="${margins.left}" w:header="${margins.header}" w:footer="${margins.footer}" w:gutter="0"/>` +
       `<w:cols w:space="720"/></w:sectPr>`;
-    return { tables: segments.map(emit), sectPr, scale };
+    return { parts, sectPr, scale };
   }
 
   // ------------------------------------------------------- docx багц ---
@@ -443,10 +538,15 @@
     let body = "";
     sheets.forEach((s, i) => {
       const last = i === sheets.length - 1;
-      s.tables.forEach((t, j) => {
-        body += t;
-        const breakHere = !last && j === s.tables.length - 1;
-        body += `<w:p><w:pPr>${TAIL_PPR}${breakHere ? s.sectPr : ""}</w:pPr></w:p>`;
+      s.parts.forEach((p, j) => {
+        body += p.xml;
+        const next = s.parts[j + 1];
+        // Хүснэгтийн араас paragraph хэрэгтэй (хоёр хүснэгт нийлэхгүй, sectPr байрлах)
+        if (p.type === "tbl" && (!next || next.type === "tbl")) {
+          body += `<w:p><w:pPr>${TAIL_PPR}${!next && !last ? s.sectPr : ""}</w:pPr></w:p>`;
+        } else if (!next && !last) {
+          body += `<w:p><w:pPr>${TAIL_PPR}${s.sectPr}</w:pPr></w:p>`;
+        }
       });
       if (last) body += s.sectPr;
     });
@@ -466,7 +566,8 @@
 
   // -------------------------------------------------------- үндсэн ---
   async function excelToWord(data, opts) {
-    opts = Object.assign({ fit: true, scaleFonts: true, sheets: null }, opts || {});
+    opts = Object.assign({ fit: true, scaleFonts: true, sheets: null, paper: null,
+      orientation: "auto", margins: null, plainOutside: false }, opts || {});
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(data);
     const theme = parseTheme(wb._themes && wb._themes.theme1);
