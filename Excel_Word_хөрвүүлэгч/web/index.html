@@ -290,7 +290,7 @@ input[type=file] { display: none; }
     try { names = await window.excelToWord.sheetNames(buf.slice(0)); }
     catch (e) {
       state.className = "state err"; state.textContent = "Алдаа";
-      item.append(el("div", "note err", "Файлыг уншиж чадсангүй. Файл эвдэрсэн эсвэл нууц үгтэй байж магадгүй."));
+      item.append(el("div", "note err", (e && e.message) ? e.message : "Файлыг уншиж чадсангүй."));
       return;
     }
     state.textContent = names.length + " хуудас";

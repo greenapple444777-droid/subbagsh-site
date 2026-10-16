@@ -564,12 +564,66 @@
     return zip;
   }
 
+  // ------------------------------------------------- файл ачаалах ---
+  // ExcelJS зураг, график, тайлбар (comment), "Format as Table" хүснэгт, pivot
+  // зэрэгт алдаа заадаг. Эдгээр нь Word-д ордоггүй тул уншихаас өмнө хасна.
+  const DROP_REL = /\/(drawing|vmlDrawing|comments|threadedComment|table|pivotTable|image|chart|ctrlProp|control|oleObject|package)$/;
+  async function sanitize(data) {
+    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+    if (bytes[0] === 0xD0 && bytes[1] === 0xCF) {
+      throw new Error("Энэ бол хуучин .xls (Excel 97–2003) файл, нэрийг нь .xlsx болгосон байна. " +
+        "Excel-ээр нээгээд Файл → Save As → Excel Workbook (.xlsx) гэж хадгалаад дахин оруулна уу.");
+    }
+    if (bytes[0] !== 0x50 || bytes[1] !== 0x4B) {
+      throw new Error("Файл Excel (.xlsx) бүтэцтэй биш байна. Excel-ээр нээгээд Excel Workbook (.xlsx) гэж дахин хадгална уу.");
+    }
+    let zip;
+    try { zip = await JSZip.loadAsync(bytes); }
+    catch (e) { throw new Error("Файл эвдэрсэн эсвэл нууц үгээр хамгаалагдсан байна."); }
+    if (!zip.file("xl/workbook.xml")) {
+      if (zip.file("EncryptedPackage")) throw new Error("Файл нууц үгээр хамгаалагдсан байна. Excel-ээр нээж нууц үгийг нь авч хадгалаад дахин оруулна уу.");
+      throw new Error("Файл Excel (.xlsx) бүтэцтэй биш байна.");
+    }
+    const tasks = [];
+    zip.forEach((path, f) => {
+      if (/^xl\/worksheets\/_rels\/[^/]+\.rels$/.test(path)) {
+        tasks.push(f.async("string").then((x) => zip.file(path,
+          x.replace(/<Relationship\b[^>]*\/>/g, (rel) => {
+            const t = /Type="([^"]*)"/.exec(rel);
+            return t && DROP_REL.test(t[1]) ? "" : rel;
+          }))));
+      } else if (/^xl\/worksheets\/[^/]+\.xml$/.test(path)) {
+        tasks.push(f.async("string").then((x) => zip.file(path, x
+          .replace(/<(drawing|legacyDrawing|legacyDrawingHF|picture)\b[^>]*\/>/g, "")
+          .replace(/<tableParts\b[\s\S]*?<\/tableParts>|<tableParts\b[^>]*\/>/g, "")
+          .replace(/<controls\b[\s\S]*?<\/controls>/g, "")
+          .replace(/<oleObjects\b[\s\S]*?<\/oleObjects>/g, ""))));
+      } else if (path === "xl/workbook.xml") {
+        tasks.push(f.async("string").then((x) => zip.file(path,
+          x.replace(/<pivotCaches\b[\s\S]*?<\/pivotCaches>/g, ""))));
+      }
+    });
+    await Promise.all(tasks);
+    // Хамаарлаас салгасан хэсгүүдийг өөрсдийг нь ч устгана (ExcelJS тэднийг шууд уншдаг)
+    zip.forEach((path) => {
+      if (/^xl\/(drawings|charts|chartsheets|comments\d*\.xml|threadedComments|persons|tables|pivotTables|pivotCache|ctrlProps|activeX|embeddings)/.test(path)) zip.remove(path);
+    });
+    return zip.generateAsync({ type: "uint8array" });
+  }
+
+  async function loadWorkbook(data) {
+    const clean = await sanitize(data);
+    const wb = new ExcelJS.Workbook();
+    try { await wb.xlsx.load(clean); }
+    catch (e) { throw new Error("Excel файлыг уншиж чадсангүй (" + (e && e.message ? e.message : e) + ")."); }
+    return wb;
+  }
+
   // -------------------------------------------------------- үндсэн ---
   async function excelToWord(data, opts) {
     opts = Object.assign({ fit: true, scaleFonts: true, sheets: null, paper: null,
       orientation: "auto", margins: null, plainOutside: false }, opts || {});
-    const wb = new ExcelJS.Workbook();
-    await wb.xlsx.load(data);
+    const wb = await loadWorkbook(data);
     const theme = parseTheme(wb._themes && wb._themes.theme1);
     const color = makeColorResolver(theme);
     const log = [];
@@ -590,8 +644,7 @@
   }
   excelToWord.formatValue = formatValue;
   excelToWord.sheetNames = async function (data) {
-    const wb = new ExcelJS.Workbook();
-    await wb.xlsx.load(data);
+    const wb = await loadWorkbook(data);
     const names = [];
     wb.eachSheet((ws) => { if (!ws.state || ws.state === "visible") names.push(ws.name); });
     return names;
