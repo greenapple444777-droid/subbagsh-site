@@ -568,11 +568,103 @@
   // ExcelJS зураг, график, тайлбар (comment), "Format as Table" хүснэгт, pivot
   // зэрэгт алдаа заадаг. Эдгээр нь Word-д ордоггүй тул уншихаас өмнө хасна.
   const DROP_REL = /\/(drawing|vmlDrawing|comments|threadedComment|table|pivotTable|image|chart|ctrlProp|control|oleObject|package)$/;
+  // Стандарт бус xlsx-ийг (x: угтвартай XML, Strict OOXML, өөр нэртэй
+  // хэсгүүд — вэб систем, .NET программаас гаргасан файлд түгээмэл) ExcelJS-ийн
+  // уншдаг энгийн бүтэц рүү шилжүүлнэ.
+  const MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+  const PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
+  const STRICT_NS = [
+    ["http://purl.oclc.org/ooxml/spreadsheetml/main", MAIN_NS],
+    ["http://purl.oclc.org/ooxml/officeDocument/relationships", "http://schemas.openxmlformats.org/officeDocument/2006/relationships"],
+    ["http://purl.oclc.org/ooxml/drawingml/main", "http://schemas.openxmlformats.org/drawingml/2006/main"],
+  ];
+  function fixXml(x) {
+    for (const [a, b] of STRICT_NS) x = x.split(a).join(b);
+    for (const ns of [MAIN_NS, PKG_REL_NS]) {
+      const re = new RegExp('xmlns:([A-Za-z_][\\w.-]*)="' + ns.replace(/[.\/]/g, "\\$&") + '"', "g");
+      const prefixes = [];
+      let m;
+      while ((m = re.exec(x))) prefixes.push(m[1]);
+      for (const p of prefixes) {
+        x = x.replace(new RegExp("<(/?)" + p + ":", "g"), "<$1");
+        const decl = 'xmlns:' + p + '="' + ns + '"';
+        x = x.includes('xmlns="' + ns + '"') ? x.split(" " + decl).join("") : x.split(decl).join('xmlns="' + ns + '"');
+      }
+    }
+    return x;
+  }
+  const resolvePath = (base, target) => {
+    if (target.startsWith("/")) return target.slice(1);
+    const parts = base.split("/"); parts.pop();
+    for (const seg of target.split("/")) { if (seg === "..") parts.pop(); else if (seg && seg !== ".") parts.push(seg); }
+    return parts.join("/");
+  };
+  const relsPathFor = (p) => { const i = p.lastIndexOf("/"); return p.slice(0, i + 1) + "_rels/" + p.slice(i + 1) + ".rels"; };
+  const parseRels = (x) => (x.match(/<Relationship\b[^>]*>/g) || []).map((tag) => {
+    const a = (n) => { const m = new RegExp(n + '="([^"]*)"').exec(tag); return m ? m[1] : ""; };
+    return { Id: a("Id"), Type: a("Type"), Target: a("Target"), TargetMode: a("TargetMode") };
+  });
+  const relsXml = (rels) => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="' + PKG_REL_NS + '">' +
+    rels.map((r) => '<Relationship Id="' + r.Id + '" Type="' + r.Type + '" Target="' + esc(r.Target) + '"' +
+      (r.TargetMode ? ' TargetMode="' + r.TargetMode + '"' : "") + "/>").join("") + "</Relationships>";
+
+  async function normalizePackage(zip) {
+    // 1) Бүх XML-ийн namespace-ийг засна
+    const texts = [];
+    zip.forEach((path, f) => { if (!f.dir && /\.(xml|rels)$/i.test(path)) texts.push(path); });
+    for (const path of texts) zip.file(path, fixXml(await zip.file(path).async("string")));
+
+    // 2) Хэсгүүдийн байрлалыг стандарт болгоно
+    const rootRelsFile = zip.file("_rels/.rels");
+    const rootRels = rootRelsFile ? parseRels(await rootRelsFile.async("string")) : [];
+    const docRel = rootRels.find((r) => /\/officeDocument$/.test(r.Type));
+    const wbPath = docRel ? resolvePath("", docRel.Target) : "xl/workbook.xml";
+    if (!zip.file(wbPath)) return zip;
+    const wbRelsFile = zip.file(relsPathFor(wbPath));
+    const wbRels = wbRelsFile ? parseRels(await wbRelsFile.async("string")) : [];
+    const sheetRels = wbRels.filter((r) => /\/worksheet$/.test(r.Type));
+    const standard = wbPath === "xl/workbook.xml" && !!wbRelsFile &&
+      wbRels.every((r) => r.TargetMode === "External" || !/^\//.test(r.Target)) &&
+      sheetRels.every((r) => /^xl\/worksheets\/sheet\d+\.xml$/.test(resolvePath(wbPath, r.Target)));
+    if (standard) return zip;
+
+    const out = new JSZip();
+    const copy = async (from, to) => { const f = zip.file(from); if (f) out.file(to, await f.async("uint8array")); return !!f; };
+    await copy("[Content_Types].xml", "[Content_Types].xml");
+    for (const p of ["docProps/core.xml", "docProps/app.xml"]) await copy(p, p);
+    out.file("_rels/.rels", relsXml([{ Id: "rId1",
+      Type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument", Target: "xl/workbook.xml" }]));
+    await copy(wbPath, "xl/workbook.xml");
+    const newRels = [];
+    let n = 0;
+    for (const r of wbRels) {
+      if (r.TargetMode === "External") continue;
+      const src = resolvePath(wbPath, r.Target);
+      let dst = null;
+      if (/\/worksheet$/.test(r.Type)) dst = "xl/worksheets/sheet" + (++n) + ".xml";
+      else if (/\/sharedStrings$/.test(r.Type)) dst = "xl/sharedStrings.xml";
+      else if (/\/styles$/.test(r.Type)) dst = "xl/styles.xml";
+      else if (/\/theme$/.test(r.Type)) dst = "xl/theme/theme1.xml";
+      if (!dst || !(await copy(src, dst))) continue;
+      newRels.push({ Id: r.Id, Type: r.Type, Target: dst.slice(3) });
+      if (/\/worksheet$/.test(r.Type)) {
+        const sr = zip.file(relsPathFor(src));
+        if (sr) {
+          const rels = parseRels(await sr.async("string")).map((x) => x.TargetMode === "External" ? x
+            : Object.assign(x, { Target: "/" + resolvePath(src, x.Target) }));
+          out.file(relsPathFor(dst), relsXml(rels));
+        }
+      }
+    }
+    out.file("xl/_rels/workbook.xml.rels", relsXml(newRels));
+    return out;
+  }
+
   async function sanitize(data) {
     const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
     if (bytes[0] === 0xD0 && bytes[1] === 0xCF) {
-      throw new Error("Энэ бол хуучин .xls (Excel 97–2003) файл, нэрийг нь .xlsx болгосон байна. " +
-        "Excel-ээр нээгээд Файл → Save As → Excel Workbook (.xlsx) гэж хадгалаад дахин оруулна уу.");
+      throw new Error("Энэ файл хуучин .xls (Excel 97–2003) хэлбэртэй эсвэл нууц үгээр хамгаалагдсан байна. " +
+        "Excel-ээр нээгээд (нууц үгтэй бол нууц үгийг нь авч) Файл → Save As → Excel Workbook (.xlsx) гэж хадгалаад дахин оруулна уу.");
     }
     if (bytes[0] !== 0x50 || bytes[1] !== 0x4B) {
       throw new Error("Файл Excel (.xlsx) бүтэцтэй биш байна. Excel-ээр нээгээд Excel Workbook (.xlsx) гэж дахин хадгална уу.");
@@ -580,6 +672,7 @@
     let zip;
     try { zip = await JSZip.loadAsync(bytes); }
     catch (e) { throw new Error("Файл эвдэрсэн эсвэл нууц үгээр хамгаалагдсан байна."); }
+    zip = await normalizePackage(zip);
     if (!zip.file("xl/workbook.xml")) {
       if (zip.file("EncryptedPackage")) throw new Error("Файл нууц үгээр хамгаалагдсан байна. Excel-ээр нээж нууц үгийг нь авч хадгалаад дахин оруулна уу.");
       throw new Error("Файл Excel (.xlsx) бүтэцтэй биш байна.");
