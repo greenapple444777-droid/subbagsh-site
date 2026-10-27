@@ -74,50 +74,67 @@ LABEL_RE = re.compile(r'(Шинэ СҮД:|Уялдаа СҮД:)')
 
 def list_sud(body):
     """«Шинэ СҮД:», «Уялдаа СҮД:» гэсэн шошгыг тод болгож, СҮД бүрийг доош тусдаа мөрөнд жагсаана."""
+    XS = '{http://www.w3.org/XML/1998/namespace}space'
+
+    def is_bold(r):
+        b = r.find(f'{W}rPr/{W}b')
+        return b is not None and b.get(W + 'val') not in ('0', 'false')
+
     for p in list(body.iter(W + 'p')):
-        t = ''.join(p.itertext())
-        m = LABEL_RE.search(t)
-        if not m or p.find('.//' + W + 'drawing') is not None:
+        if p.find('.//' + W + 'drawing') is not None:
             continue
         runs = p.findall(W + 'r')
-        rpr = runs[0].find(W + 'rPr') if runs else None
-        head, label, rest = t[:m.start()], m.group(1), t[m.end():].strip()
-        starts = [x.start() for x in CODE_RE.finditer(rest)]
-        items = [rest[a:b].strip() for a, b in zip(starts, starts[1:] + [len(rest)])] if starts else []
-        if starts and rest[:starts[0]].strip():
-            items = [rest[:starts[0]].strip()] + items
-        if not starts and rest:
-            items = [rest]
+        # мөр таслалт (w:br)-ыг \n болгон бичвэрийг уншина
+        t = ''.join(''.join('\n' if c.tag == W + 'br' else (c.text or '') for c in r) for r in runs)
+        labels = list(LABEL_RE.finditer(t))
+        if not labels:
+            continue
+        plain = next((r for r in reversed(runs) if not is_bold(r)), runs[0])
+        base_rpr = plain.find(W + 'rPr')
+        head_bold = is_bold(runs[0])
 
         def run(text, bold=False):
             r = etree.Element(W + 'r')
-            rp = copy.deepcopy(rpr) if rpr is not None else etree.Element(W + 'rPr')
-            for b in rp.findall(W + 'b') + rp.findall(W + 'bCs'):
-                rp.remove(b)
+            rp = copy.deepcopy(base_rpr) if base_rpr is not None else etree.Element(W + 'rPr')
+            for x in rp.findall(W + 'b') + rp.findall(W + 'bCs'):
+                rp.remove(x)
             if bold:
                 rp.insert(1 if rp.find(W + 'rFonts') is not None else 0, etree.Element(W + 'b'))
             r.append(rp)
-            te = etree.SubElement(r, W + 't')
-            te.text = text
-            te.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+            for k, line in enumerate(text.split('\n')):
+                if k:
+                    etree.SubElement(r, W + 'br')
+                te = etree.SubElement(r, W + 't')
+                te.text = line
+                te.set(XS, 'preserve')
             return r
 
-        bel = runs[0].find(f'{W}rPr/{W}b') if runs else None
-        head_bold = bel is not None and bel.get(W + 'val') not in ('0', 'false')
-        for r in runs:
-            p.remove(r)
-        if head.strip():
-            p.append(run(head, head_bold))
-        p.append(run(label, True))
-        prev = p
-        for it in items:
+        def new_par():
             q = etree.Element(W + 'p')
             ppr = p.find(W + 'pPr')
             if ppr is not None:
                 q.append(copy.deepcopy(ppr))
-            q.append(run(it))
-            prev.addnext(q)
-            prev = q
+            return q
+
+        for r in runs:
+            p.remove(r)
+        head = t[:labels[0].start()]
+        if head.strip():
+            p.append(run(head, head_bold))
+        cur, prev = p, p
+        for n, m in enumerate(labels):
+            end = labels[n + 1].start() if n + 1 < len(labels) else len(t)
+            rest = t[m.end():end].replace('\n', ' ').strip()
+            if n:
+                cur = new_par(); prev.addnext(cur); prev = cur
+            cur.append(run(m.group(1), True))
+            starts = [x.start() for x in CODE_RE.finditer(rest)]
+            items = [rest[x:y].strip() for x, y in zip(starts, starts[1:] + [len(rest)])]
+            lead = rest[:starts[0]].strip() if starts else rest
+            if lead:
+                cur.append(run(' ' + lead))
+            for it in items:
+                q = new_par(); q.append(run(it)); prev.addnext(q); prev = q
 
 
 def apply_font(el, resize):
