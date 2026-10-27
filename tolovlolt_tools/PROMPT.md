@@ -83,3 +83,15 @@ python3 project_xlsx_to_docx.py "tusul.xlsx" out/ 10 3   # 10 сарын 3, 4-р
 ```bash
 python3 week_xlsx_with_days.py 7honog.xlsx odruud.docx гаралт.docx
 ```
+
+## СҮД-ийг сарын төлөвлөгөөнд тааруулах
+
+Сарын төлөвлөгөөний (.xlsx; B баганад «КОД: тайлбар», C–F баганад 1–4-р 7 хоногийн
+Шинэ / Уялдаа / Давталт) хуваарилалтаар 7 хоногийн файл бүрийн СҮД жагсаалтыг
+(7 хоногийн хуудас + 5 өдөр) яг сольно. Үйл ажиллагааны бичвэр өөрчлөгдөхгүй.
+
+```bash
+python3 split_weeks.py сар.docx out/
+for f in out/*.docx; do n=$(basename "$f" | cut -c1); python3 apply_month_sud.py сарын_төлөвлөгөө.xlsx "$f" $n; done
+python3 fit_images.py out/*.docx
+```
