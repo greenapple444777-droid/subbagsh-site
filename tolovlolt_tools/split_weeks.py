@@ -68,6 +68,58 @@ def set_font(rpr, resize):
         rpr.append(c)
 
 
+CODE_RE = re.compile(r'(?:(?<=\s)|^)[А-ЯӨҮЁ]{2,4}\d+\.\d+[а-яөүё]{0,2}\.\s')
+LABEL_RE = re.compile(r'(Шинэ СҮД:|Уялдаа СҮД:)')
+
+
+def list_sud(body):
+    """«Шинэ СҮД:», «Уялдаа СҮД:» гэсэн шошгыг тод болгож, СҮД бүрийг доош тусдаа мөрөнд жагсаана."""
+    for p in list(body.iter(W + 'p')):
+        t = ''.join(p.itertext())
+        m = LABEL_RE.search(t)
+        if not m or p.find('.//' + W + 'drawing') is not None:
+            continue
+        runs = p.findall(W + 'r')
+        rpr = runs[0].find(W + 'rPr') if runs else None
+        head, label, rest = t[:m.start()], m.group(1), t[m.end():].strip()
+        starts = [x.start() for x in CODE_RE.finditer(rest)]
+        items = [rest[a:b].strip() for a, b in zip(starts, starts[1:] + [len(rest)])] if starts else []
+        if starts and rest[:starts[0]].strip():
+            items = [rest[:starts[0]].strip()] + items
+        if not starts and rest:
+            items = [rest]
+
+        def run(text, bold=False):
+            r = etree.Element(W + 'r')
+            rp = copy.deepcopy(rpr) if rpr is not None else etree.Element(W + 'rPr')
+            for b in rp.findall(W + 'b') + rp.findall(W + 'bCs'):
+                rp.remove(b)
+            if bold:
+                rp.insert(1 if rp.find(W + 'rFonts') is not None else 0, etree.Element(W + 'b'))
+            r.append(rp)
+            te = etree.SubElement(r, W + 't')
+            te.text = text
+            te.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+            return r
+
+        bel = runs[0].find(f'{W}rPr/{W}b') if runs else None
+        head_bold = bel is not None and bel.get(W + 'val') not in ('0', 'false')
+        for r in runs:
+            p.remove(r)
+        if head.strip():
+            p.append(run(head, head_bold))
+        p.append(run(label, True))
+        prev = p
+        for it in items:
+            q = etree.Element(W + 'p')
+            ppr = p.find(W + 'pPr')
+            if ppr is not None:
+                q.append(copy.deepcopy(ppr))
+            q.append(run(it))
+            prev.addnext(q)
+            prev = q
+
+
 def apply_font(el, resize):
     for r in el.iter(W + 'r'):
         rpr = r.find(W + 'rPr')
@@ -129,6 +181,9 @@ def main(src, outdir):
             pm.set(W + 'top', str(TOP)); pm.set(W + 'left', str(LEFT))
             pm.set(W + 'bottom', str(BOTTOM)); pm.set(W + 'right', str(RIGHT))
             pm.set(W + 'header', str(TOP // 2)); pm.set(W + 'footer', str(BOTTOM))
+
+        # СҮД-үүдийг доош жагсааж, «Шинэ СҮД», «Уялдаа СҮД» шошгыг тод болгоно
+        list_sud(body)
 
         # 2) 7 хоногийн хүснэгт: толгой мөр дараагийн хуудсанд давтагдахгүй, мөр хуваагдахгүй, өргөн хуудсанд багтана
         kids = list(body)

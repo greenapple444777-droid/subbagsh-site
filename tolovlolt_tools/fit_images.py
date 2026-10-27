@@ -29,6 +29,33 @@ def scale(drawing, f):
                 ext.set(k, str(int(int(ext.get(k)) * f)))
 
 
+def keep_next(p):
+    ppr = p.find(W + 'pPr')
+    if ppr is None:
+        ppr = etree.Element(W + 'pPr'); p.insert(0, ppr)
+    if ppr.find(W + 'keepNext') is None:
+        ppr.insert(1 if ppr.find(W + 'pStyle') is not None else 0, etree.Element(W + 'keepNext'))
+
+
+def overflow_days(doc, parts):
+    """Зөвхөн зурагтай (бичвэргүй) хуудасны өмнөх хуудасны өдрийн гарчгуудыг буцаана."""
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = os.path.join(tmp, 'probe.docx')
+        parts['word/document.xml'] = etree.tostring(doc, xml_declaration=True, encoding='UTF-8', standalone=True)
+        with zipfile.ZipFile(probe, 'w', zipfile.ZIP_DEFLATED) as o:
+            for n, d in parts.items():
+                o.writestr(n, d)
+        pages = page_texts(probe, tmp)
+    heads = []
+    for i in range(1, len(pages) - 1):          # сүүлийн элемент нь \f-ийн араас гарах хоосон мөр
+        if not pages[i].strip():
+            m = next((l.strip() for l in pages[i - 1].splitlines() if DAY_RE.search(l)), None)
+            if m:
+                heads.append(m)
+    return heads
+
+
+
 def fit(path):
     z = zipfile.ZipFile(path)
     parts = {n: z.read(n) for n in z.namelist()}
@@ -36,23 +63,7 @@ def fit(path):
     body = doc.find(W + 'body')
     done = {}
     for _ in range(int(math.log(MIN) / math.log(STEP)) + 1):
-        with tempfile.TemporaryDirectory() as tmp:
-            probe = os.path.join(tmp, 'probe.docx')
-            parts['word/document.xml'] = etree.tostring(doc, xml_declaration=True, encoding='UTF-8', standalone=True)
-            with zipfile.ZipFile(probe, 'w', zipfile.ZIP_DEFLATED) as o:
-                for n, d in parts.items():
-                    o.writestr(n, d)
-            pages = page_texts(probe, tmp)
-        # хоосон (зөвхөн зурагтай) хуудасны өмнөх хуудасны өдрийг олно
-        heads = []
-        for i in range(1, len(pages)):
-            if not pages[i].strip() and i < len(pages) - 1:   # сүүлийн элемент нь \f-ийн араас гарах хоосон мөр
-                m = None
-                for line in pages[i - 1].splitlines():
-                    if DAY_RE.search(line):
-                        m = line.strip(); break
-                if m:
-                    heads.append(m)
+        heads = overflow_days(doc, parts)
         if not heads:
             break
         changed = False
@@ -74,12 +85,35 @@ def fit(path):
             changed = True
         if not changed:
             break
+    # 60% хүртэл жижигрүүлээд ч багтаагүй өдөр: зургийг анхны хэмжээнд нь буцааж,
+    # сүүлийн «Багшийн чиглүүлэх асуулт» хэсгийг зурагтай хамт дараагийн хуудсанд шилжүүлнэ
+    for h in overflow_days(doc, parts):
+        kids = list(body)
+        idx = next((j for j, e in enumerate(kids) if ''.join(e.itertext()).strip() == h), None)
+        if idx is None:
+            continue
+        day = []
+        for e in kids[idx + 1:]:
+            if DAY_RE.search(''.join(e.itertext())) or e.find('.//' + W + 'sectPr') is not None:
+                break
+            day.append(e)
+        for e in day:
+            for d in e.iter(W + 'drawing'):
+                scale(d, 1 / done.get(h, 1.0))
+        q = max((j for j, e in enumerate(day) if ''.join(e.itertext()).strip().startswith('Багшийн чиглүүлэх асуулт')), default=None)
+        img = max((j for j, e in enumerate(day) if e.find('.//' + W + 'drawing') is not None), default=None)
+        if q is not None and img is not None and q < img:
+            for e in day[q:img]:
+                keep_next(e)
+        done[h] = 1.0
+        print(f'  {os.path.basename(path)}: {h} — зураг багтаагүй тул сүүлийн асуултуудтай хамт дараагийн хуудсанд')
     parts['word/document.xml'] = etree.tostring(doc, xml_declaration=True, encoding='UTF-8', standalone=True)
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as o:
         for n, d in parts.items():
             o.writestr(n, d)
     for h, f in done.items():
-        print(f'  {os.path.basename(path)}: {h} — зураг {round(f * 100)}%')
+        if f < 1:
+            print(f'  {os.path.basename(path)}: {h} — зураг {round(f * 100)}%')
 
 
 if __name__ == '__main__':
