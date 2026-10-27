@@ -100,7 +100,7 @@ def main(src, outdir):
     # файлын нэр: «АХЛАХ БҮЛЭГ - ХӨГЖИЛТЭЙ ТОГЛООМУУД»
     title = next((txt(e) for e in els[weeks[0]:weeks[0] + 4] if 'БҮЛГИЙН' in txt(e)), '')
     m = re.match(r'(\S+) БҮЛГИЙН', title)
-    group = (f'{m.group(1)} БҮЛЭГ - ' if m else '') + txt(els[1])
+    group = txt(els[1]) if 'БҮЛЭГ' in txt(els[1]) else (f'{m.group(1)} БҮЛЭГ - ' if m else '') + txt(els[1])
     ref_grid = None
 
     # styles: default font Arial 11
@@ -114,7 +114,8 @@ def main(src, outdir):
         tail = [copy.deepcopy(e) for e in els[outro_start:-1]]
         # outro (Сонсъё, дэмжье ...) өдрийн хэсгийн төгсгөлд, тухайн хэсгийн section дотор орно
         if week and week[-1].find('.//' + W + 'sectPr') is not None:
-            week = week[:-1] + tail + [week[-1]]
+            # өдрийн хэсгийг хаадаг section-ийг баримтын эцсийн sectPr орлоно (хоосон сүүлийн хуудас гаргахгүй)
+            week = week[:-1] + tail
         else:
             week = week + tail
         for e in list(body):
