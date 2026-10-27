@@ -12,6 +12,7 @@ WP = '{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}'
 A = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
 DAY_RE = re.compile(r'\d+ (дэх|дахь) өдөр\s*-\s*\S+ гараг')
 STEP, MIN = 0.92, 0.60
+SHORT = 600          # үүнээс богино бичвэртэй үргэлжлэл хуудсыг «илүүдэл» гэж үзнэ
 
 
 def page_texts(docx, tmp):
@@ -38,7 +39,7 @@ def keep_next(p):
 
 
 def overflow_days(doc, parts):
-    """Зөвхөн зурагтай (бичвэргүй) хуудасны өмнөх хуудасны өдрийн гарчгуудыг буцаана."""
+    """Өдрийн төгсгөл богино илүүдэл хуудсанд шилжсэн өдрүүдийн гарчгийг буцаана."""
     with tempfile.TemporaryDirectory() as tmp:
         probe = os.path.join(tmp, 'probe.docx')
         parts['word/document.xml'] = etree.tostring(doc, xml_declaration=True, encoding='UTF-8', standalone=True)
@@ -48,7 +49,8 @@ def overflow_days(doc, parts):
         pages = page_texts(probe, tmp)
     heads = []
     for i in range(1, len(pages) - 1):          # сүүлийн элемент нь \f-ийн араас гарах хоосон мөр
-        if not pages[i].strip():
+        # өдрийн үргэлжлэл болох богино хуудас (зураг, 1–2 асуулт л үлдсэн)
+        if len(pages[i].strip()) < SHORT and not DAY_RE.search(pages[i]):
             m = next((l.strip() for l in pages[i - 1].splitlines() if DAY_RE.search(l)), None)
             if m:
                 heads.append(m)
