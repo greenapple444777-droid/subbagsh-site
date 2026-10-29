@@ -1,7 +1,8 @@
 """Сарын төлөвлөгөөний (.xlsx) 7 хоног бүрийн Шинэ / Уялдаа / Давталт СҮД-ийг
 7 хоногийн Word төлөвлөлтөд (7 хоногийн хуудас + 5 өдөр) яг тааруулж сольно.
 
-Хэрэглээ: python3 apply_month_sud.py САР.xlsx 7ХОНОГ.docx ДОЛОО_ХОНОГИЙН_ДУГААР [ГАРАХ.docx]
+Хэрэглээ: python3 apply_month_sud.py САР.xlsx 7ХОНОГ.docx ДОЛОО_ХОНОГИЙН_ДУГААР|all [ГАРАХ.docx]
+  all — нэг файлд 1–4-р 7 хоногийн СҮД блок дарааллаар байх үед (жишээ нь 4 долоо хоногийн хүснэгттэй файл).
   ГАРАХ-ыг өгөөгүй бол файлыг өөрийг нь шинэчилнэ.
 
 Сарын төлөвлөгөөний хүснэгт: B баганад «КОД: тайлбар», C–F баганад 1–4-р 7 хоногийн төрөл
@@ -70,11 +71,15 @@ def set_text(p, value, bold_code=False):
 
 
 def apply(doc, plan):
+    """plan: нэг 7 хоногийн хуваарилалт (бүх СҮД блокт), эсвэл жагсаалт — блок бүрт дарааллаар нь."""
     body = doc.find(W + 'body')
+    plans = plan if isinstance(plan, list) else None
     blocks = 0
     for p in list(body.iter(W + 'p')):
         if 'Шинэ СҮД:' not in text(p):
             continue
+        if plans is not None:
+            plan = plans[blocks]
         # хуучин жагсаалт (Шинэ-ийн мөрүүд, Уялдаа/Давталт шошго ба мөрүүд)-ыг цуглуулж хасна
         item_tpl = label_tpl = None
         nxt = p.getnext()
@@ -113,7 +118,9 @@ def apply(doc, plan):
 
 
 def main(xlsx, docx, week, out=None):
-    plan = month_plan(xlsx)[int(week)]
+    """week: 7 хоногийн дугаар (1–4), эсвэл 'all' — нэг файлд 4 долоо хоног дарааллаар байвал."""
+    months = month_plan(xlsx)
+    plan = [months[w] for w in range(1, 5)] if week == 'all' else months[int(week)]
     z = zipfile.ZipFile(docx)
     parts = {n: z.read(n) for n in z.namelist()}
     doc = etree.fromstring(parts['word/document.xml'])
@@ -122,8 +129,9 @@ def main(xlsx, docx, week, out=None):
     with zipfile.ZipFile(out or docx, 'w', zipfile.ZIP_DEFLATED) as o:
         for k, d in parts.items():
             o.writestr(k, d)
-    print(f'{out or docx}: {n} хэсэгт СҮД сольсон — ' +
-          '; '.join(f'{k}: {", ".join(x.split(".")[0] + "." + x.split(".")[1] for x in plan[k])}' for k in KINDS if plan[k]))
+    for i, pl in enumerate(plan if isinstance(plan, list) else [plan]):
+        print(f'{out or docx}: {n} хэсэгт СҮД сольсон — ' + (f'{i + 1}-р 7 хоног: ' if isinstance(plan, list) else '') +
+              '; '.join(f'{k}: {", ".join(x.split(" ")[0].rstrip(".") for x in pl[k])}' for k in KINDS if pl[k]))
 
 
 if __name__ == '__main__':
