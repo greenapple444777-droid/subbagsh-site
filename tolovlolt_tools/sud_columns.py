@@ -30,7 +30,11 @@ for p in [e for e in body if e.tag == W + 'p' and 'Шинэ СҮД:' in txt(e)]:
     for s in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'): b.append(E(s, val='nil'))
     pr.append(E('tblLayout', type='fixed'))
     m = etree.SubElement(pr, W + 'tblCellMar'); m.append(E('left', w=0, type='dxa')); m.append(E('right', w=113, type='dxa'))
-    g = etree.SubElement(tbl, W + 'tblGrid'); ws = [avail // len(cols)] * len(cols); ws[-1] = avail - sum(ws[:-1])
+    # баганын өргөнийг бичвэрийн уртад нь харьцуулан хуваана (хамгийн багадаа 18%)
+    lens = [max(1, sum(len(txt(e)) for e in c)) for c in cols]
+    share = [max(0.18, l / sum(lens)) for l in lens]
+    ws = [int(avail * x / sum(share)) for x in share]; ws[-1] = avail - sum(ws[:-1])
+    g = etree.SubElement(tbl, W + 'tblGrid')
     for w in ws: g.append(E('gridCol', w=w))
     tr = etree.SubElement(tbl, W + 'tr'); trpr = etree.SubElement(tr, W + 'trPr'); trpr.append(E('cantSplit'))
     for col, w in zip(cols, ws):
