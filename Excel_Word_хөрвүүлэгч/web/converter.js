@@ -218,7 +218,8 @@
 
     // Муж
     let range = null;
-    if (ps.printArea) range = parseRef(String(ps.printArea).split(/&&|,/)[0].split("!").pop());
+    const printArea = (opts.printAreas && opts.printAreas[ws.name]) || ps.printArea;
+    if (printArea) range = parseRef(String(printArea).split(/&&|,/)[0].split("!").pop());
     if (!range) {
       let maxR = 0, maxC = 0;
       ws.eachRow({ includeEmpty: false }, (row, r) => {
@@ -231,7 +232,7 @@
       range = { minR: 1, minC: 1, maxR, maxC };
     }
     const merges = (ws.model.merges || []).map(parseRef).filter(Boolean);
-    if (!ps.printArea) {
+    if (!printArea) {
       for (const mr of merges) {
         if (mr.minR <= range.maxR && mr.minC <= range.maxC) {
           range.maxR = Math.max(range.maxR, mr.maxR); range.maxC = Math.max(range.maxC, mr.maxC);
@@ -342,8 +343,10 @@
       let body = "";
       if (value && typeof value === "object" && !(value instanceof Date)) {
         if ("formula" in value || "sharedFormula" in value) {
-          if (value.result === undefined) { stats.missingFormula++; value = null; }
-          else value = value.result;
+          // cell.value нь 0, false, "" хариуг хаядаг (ExcelJS) → cell.result-ээс авна
+          const res = cell && cell.result !== undefined ? cell.result : value.result;
+          if (res === undefined) value = null;
+          else value = res;
         }
         if (value && typeof value === "object" && "hyperlink" in value) value = value.text;
         if (value && typeof value === "object" && "error" in value) value = value.error;
@@ -677,6 +680,19 @@
       if (zip.file("EncryptedPackage")) throw new Error("Файл нууц үгээр хамгаалагдсан байна. Excel-ээр нээж нууц үгийг нь авч хадгалаад дахин оруулна уу.");
       throw new Error("Файл Excel (.xlsx) бүтэцтэй биш байна.");
     }
+    // Хариу нь огт хадгалагдаагүй (<v> байхгүй) томьёоны тоо
+    let uncached = 0;
+    const countUncached = (x) => {
+      const re = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+      let m;
+      while ((m = re.exec(x))) {
+        const body = m[2];
+        if (!body || !body.includes("<f")) continue;
+        // <v> байхгүй, эсвэл хоосон <v/> боловч текст (t="str") хариу биш бол бодогдоогүй
+        const v = /<v\b[^>]*?(?:\/>|>([\s\S]*?)<\/v>)/.exec(body);
+        if (!v || (!v[1] && !/\bt="str"/.test(m[1]))) uncached++;
+      }
+    };
     const tasks = [];
     zip.forEach((path, f) => {
       if (/^xl\/worksheets\/_rels\/[^/]+\.rels$/.test(path)) {
@@ -686,7 +702,7 @@
             return t && DROP_REL.test(t[1]) ? "" : rel;
           }))));
       } else if (/^xl\/worksheets\/[^/]+\.xml$/.test(path)) {
-        tasks.push(f.async("string").then((x) => zip.file(path, x
+        tasks.push(f.async("string").then((x) => (countUncached(x), x)).then((x) => zip.file(path, x
           .replace(/<(drawing|legacyDrawing|legacyDrawingHF|picture)\b[^>]*\/>/g, "")
           .replace(/<tableParts\b[\s\S]*?<\/tableParts>|<tableParts\b[^>]*\/>/g, "")
           .replace(/<controls\b[\s\S]*?<\/controls>/g, "")
@@ -701,13 +717,14 @@
     zip.forEach((path) => {
       if (/^xl\/(drawings|charts|chartsheets|comments\d*\.xml|threadedComments|persons|tables|pivotTables|pivotCache|ctrlProps|activeX|embeddings)/.test(path)) zip.remove(path);
     });
-    return zip.generateAsync({ type: "uint8array" });
+    return { bytes: await zip.generateAsync({ type: "uint8array" }), uncached };
   }
 
   async function loadWorkbook(data) {
     const clean = await sanitize(data);
     const wb = new ExcelJS.Workbook();
-    try { await wb.xlsx.load(clean); }
+    wb.uncachedFormulas = clean.uncached;
+    try { await wb.xlsx.load(clean.bytes); }
     catch (e) { throw new Error("Excel файлыг уншиж чадсангүй (" + (e && e.message ? e.message : e) + ")."); }
     return wb;
   }
@@ -732,7 +749,7 @@
     });
     if (!out.length) throw new Error("Хөрвүүлэх өгөгдөлтэй хуудас олдсонгүй.");
     const zip = await buildDocx(out);
-    const result = { log, missingFormula: stats.missingFormula, zip };
+    const result = { log, missingFormula: wb.uncachedFormulas || 0, zip };
     return result;
   }
   excelToWord.formatValue = formatValue;
