@@ -1,0 +1,360 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Excel → Word хөрвүүлэгч</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Unbounded:wght@500;700&display=swap">
+<style>
+/* Layout: one narrow working column — drop sheet on top, file queue below, like a print tray. */
+:root {
+  --bg: #f3f5f2;
+  --surface: #ffffff;
+  --fg: #1b2420;
+  --muted: #5d6b64;
+  --line: #d5ddd8;
+  --xl: #1d6b47;         /* Excel ногоон */
+  --wd: #2b579a;         /* Word цэнхэр */
+  --xl-soft: #e3f0e8;
+  --wd-soft: #e5ecf7;
+  --warn: #8a5a00;
+  --warn-soft: #fff4dc;
+  --err: #a1262b;
+  --err-soft: #fbe7e7;
+  --font-display: "Unbounded", "IBM Plex Sans", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121815; --surface: #1a221e; --fg: #e4ebe7; --muted: #9aaba2; --line: #2e3a34;
+    --xl: #5fc08d; --wd: #86a9e3; --xl-soft: #1d3328; --wd-soft: #1d2a40;
+    --warn: #e6b04a; --warn-soft: #33290f; --err: #f08a8e; --err-soft: #3a1b1d;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121815; --surface: #1a221e; --fg: #e4ebe7; --muted: #9aaba2; --line: #2e3a34;
+  --xl: #5fc08d; --wd: #86a9e3; --xl-soft: #1d3328; --wd-soft: #1d2a40;
+  --warn: #e6b04a; --warn-soft: #33290f; --err: #f08a8e; --err-soft: #3a1b1d;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--font-body); }
+.wrap { max-width: 760px; margin: 0 auto; padding-inline: 16px; padding-block: 40px 64px; display: grid; gap: 28px; }
+
+header { display: grid; gap: 10px; }
+.flow { display: flex; align-items: center; gap: 10px; font: 500 12px/1 var(--font-mono); letter-spacing: .06em; }
+.chip { padding: 6px 9px; border-radius: 4px; }
+.chip.xl { background: var(--xl-soft); color: var(--xl); }
+.chip.wd { background: var(--wd-soft); color: var(--wd); }
+.arrow { color: var(--muted); }
+h1 { font: 700 clamp(26px, 5vw, 36px)/1.15 var(--font-display); margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+.lede { margin: 0; color: var(--muted); max-width: 60ch; }
+
+.drop {
+  position: relative; display: grid; place-items: center; gap: 10px; text-align: center;
+  min-height: 210px; padding: 28px 20px; border: 2px dashed var(--line); border-radius: 10px;
+  background:
+    linear-gradient(var(--line) 1px, transparent 1px) 0 0 / 100% 28px,
+    linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0 / 72px 100%,
+    var(--surface);
+  background-blend-mode: normal; cursor: pointer; transition: border-color .15s, background-color .15s;
+}
+.drop::before { content: ""; position: absolute; inset: 0; background: var(--surface); opacity: .82; border-radius: 8px; pointer-events: none; }
+.drop > * { position: relative; }
+.drop:hover, .drop:focus-visible, .drop.over { border-color: var(--xl); outline: none; }
+.drop.over::before { opacity: .7; }
+.drop strong { font: 600 17px/1.3 var(--font-body); }
+.drop span { color: var(--muted); font-size: 13.5px; }
+.btn {
+  font: 600 15px/1 var(--font-body); border: 0; border-radius: 6px; padding: 12px 18px; cursor: pointer;
+  background: var(--xl); color: var(--surface);
+}
+.btn:focus-visible { outline: 3px solid var(--wd); outline-offset: 2px; }
+.btn.secondary { background: transparent; color: var(--xl); box-shadow: inset 0 0 0 1.5px var(--xl); }
+.btn.word { background: var(--wd); }
+.btn:disabled { opacity: .5; cursor: default; }
+input[type=file] { display: none; }
+
+.opts { display: flex; flex-wrap: wrap; gap: 10px 22px; font-size: 14px; }
+.opts label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+.opts input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--xl); }
+
+.page { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: grid; gap: 14px; }
+.page h2 { font: 500 13px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0; }
+.page-row { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: flex-start; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label { padding: 9px 13px; font-size: 14px; cursor: pointer; border-left: 1px solid var(--line); }
+.seg label:first-of-type { border-left: 0; }
+.seg input:checked + label { background: var(--xl-soft); color: var(--xl); font-weight: 600; }
+.seg input:focus-visible + label { outline: 2px solid var(--wd); outline-offset: -2px; }
+.margins { display: grid; grid-template-columns: repeat(4, minmax(0, 92px)); gap: 10px; }
+.margins label { display: grid; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.margins input { width: 100%; font: 500 15px/1 var(--font-mono); font-variant-numeric: tabular-nums; padding: 8px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.margins input:focus-visible { outline: 2px solid var(--xl); outline-offset: 0; }
+.unit { font-size: 12.5px; color: var(--muted); align-self: end; padding-bottom: 9px; }
+@media (max-width: 480px) { .margins { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.queue { display: grid; gap: 12px; }
+.queue:empty { display: none; }
+.item { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 10px; min-width: 0; }
+.item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; justify-content: space-between; }
+.fname { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.state { font: 500 12px/1 var(--font-mono); padding: 5px 8px; border-radius: 4px; white-space: nowrap; }
+.state.wait { background: var(--xl-soft); color: var(--xl); }
+.state.done { background: var(--wd-soft); color: var(--wd); }
+.state.err { background: var(--err-soft); color: var(--err); }
+.item-tools { display: flex; align-items: center; gap: 8px; }
+.remove { font: 500 13px/1 var(--font-body); display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; border-radius: 4px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
+.remove:hover { border-color: var(--err); color: var(--err); background: var(--err-soft); }
+.remove:focus-visible { outline: 2px solid var(--err); outline-offset: 1px; }
+.queue-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; font-size: 14px; color: var(--muted); }
+.sheets { display: flex; flex-wrap: wrap; gap: 6px; }
+.sheet { font: 13px/1 var(--font-body); padding: 7px 10px; border-radius: 4px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.sheet[aria-pressed="true"] { border-color: var(--xl); background: var(--xl-soft); color: var(--xl); }
+.sheet .pct { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); }
+.note { font-size: 13.5px; padding: 9px 11px; border-radius: 6px; background: var(--warn-soft); color: var(--warn); }
+.note.err { background: var(--err-soft); color: var(--err); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.keeps { border-top: 1px solid var(--line); padding-top: 22px; display: grid; gap: 12px; }
+.keeps h2 { font: 500 13px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0; }
+.keeps ul { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 20px; font-size: 14px; }
+.keeps li { display: flex; gap: 8px; }
+.keeps li::before { content: "✓"; color: var(--xl); font-weight: 600; }
+.keeps li.no::before { content: "–"; color: var(--muted); }
+.keeps li.no { color: var(--muted); }
+.privacy { font-size: 13px; color: var(--muted); margin: 0; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<main class="wrap">
+  <header>
+    <div class="flow" aria-hidden="true"><span class="chip xl">.XLSX</span><span class="arrow">→</span><span class="chip wd">.DOCX</span></div>
+    <h1>Excel файлыг Word болгох</h1>
+    <p class="lede">Хүснэгтийн загвар, нэгтгэсэн нүд, хүрээ, өнгө, фонт, хуудасны тохиргоо нь Excel дээр байгаагаараа үлдэнэ. Excel-ийн хуудас бүр Word-ийн тусдаа хуудас болно.</p>
+  </header>
+
+  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Excel файл сонгох">
+    <strong>Excel файлаа энд чирж оруулна уу</strong>
+    <span>эсвэл</span>
+    <button class="btn" type="button" id="pick">Файл сонгох</button>
+    <span>.xlsx, .xlsm · хэд хэдэн файлыг зэрэг сонгож болно</span>
+    <input type="file" id="file" accept=".xlsx,.xlsm" multiple>
+  </div>
+
+  <section class="page" aria-label="Word хуудасны тохиргоо">
+    <h2>Word хуудас · A4</h2>
+    <div class="page-row">
+      <div class="seg" role="radiogroup" aria-label="Хуудасны чиглэл">
+        <input type="radio" name="orient" id="or-auto" value="auto" checked><label for="or-auto">Excel-ийнхээр</label>
+        <input type="radio" name="orient" id="or-portrait" value="portrait"><label for="or-portrait">Босоо</label>
+        <input type="radio" name="orient" id="or-landscape" value="landscape"><label for="or-landscape">Хөндлөн</label>
+      </div>
+    </div>
+    <div class="page-row">
+      <div class="margins">
+        <label for="m-left">Зүүн (урд)<input type="number" id="m-left" min="0" max="5" step="0.1" value="1.5"></label>
+        <label for="m-top">Дээд<input type="number" id="m-top" min="0" max="5" step="0.1" value="1.5"></label>
+        <label for="m-right">Баруун (хойд)<input type="number" id="m-right" min="0" max="5" step="0.1" value="0.5"></label>
+        <label for="m-bottom">Доод<input type="number" id="m-bottom" min="0" max="5" step="0.1" value="0.5"></label>
+      </div>
+      <span class="unit">см</span>
+    </div>
+    <div class="opts">
+      <label><input type="checkbox" id="opt-plain" checked> Хүрээгүй хэсгийг (гарчиг, бичвэр) хүснэгтгүй гаргах</label>
+      <label><input type="checkbox" id="opt-fit" checked> Хуудсанд багтахгүй бол жижигрүүлэх</label>
+      <label><input type="checkbox" id="opt-font" checked> Жижигрүүлэхдээ үсгийг ч жижигрүүлэх</label>
+    </div>
+  </section>
+
+  <div class="queue-bar" id="queue-bar" hidden>
+    <span id="queue-count"></span>
+    <button class="remove" type="button" id="clear-all">✕ Бүгдийг устгах</button>
+  </div>
+  <section class="queue" id="queue" aria-live="polite"></section>
+
+  <section class="keeps">
+    <h2>Юу хадгалагдах вэ</h2>
+    <ul>
+      <li>Нэгтгэсэн нүд (Merge)</li>
+      <li>Баганын өргөн, мөрийн өндөр</li>
+      <li>Хүрээ: нимгэн, зузаан, давхар</li>
+      <li>Нүдний дэвсгэр өнгө</li>
+      <li>Фонт, хэмжээ, тод, налуу, өнгө</li>
+      <li>Нэг нүдэн доторх өөр форматтай үг</li>
+      <li>Босоо бичвэр, зэрэгцүүлэлт</li>
+      <li>Тоо, хувь, огноо харагдах байдлаараа</li>
+      <li>Хэвлэх муж, давтагдах гарчиг мөр</li>
+      <li>A4 босоо/хөндлөн, захын зайг өөрөө тохируулна</li>
+      <li>Хүрээгүй гарчиг, бичвэр хүснэгтгүй гарна</li>
+      <li>Нуусан мөр, багана орохгүй</li>
+      <li class="no">Зураг, график орохгүй</li>
+    </ul>
+    <p class="privacy">Файл таны хөтөч дотор хөрвүүлэгдэнэ. Хаашаа ч илгээгдэхгүй.</p>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="converter.js"></script>
+<script>
+(function () {
+  const $ = (s) => document.querySelector(s);
+  const drop = $("#drop"), input = $("#file"), queue = $("#queue");
+  const optFit = $("#opt-fit"), optFont = $("#opt-font"), optPlain = $("#opt-plain");
+  const marginIds = ["left", "top", "right", "bottom"];
+  const DEFAULT_MARGINS = { left: 1.5, top: 1.5, right: 0.5, bottom: 0.5 };
+
+  // Сонголтыг дараагийн удаа санах (боломжгүй бол алгасна)
+  const PREF_KEY = "excel2word-prefs";
+  try {
+    const saved = JSON.parse(localStorage.getItem(PREF_KEY) || "null");
+    if (saved) {
+      const r = document.querySelector('input[name=orient][value="' + saved.orientation + '"]');
+      if (r) r.checked = true;
+      marginIds.forEach((k) => { if (saved.margins && saved.margins[k] != null) $("#m-" + k).value = saved.margins[k]; });
+      ["plain", "fit", "font"].forEach((k) => { if (typeof saved[k] === "boolean") $("#opt-" + k).checked = saved[k]; });
+    }
+  } catch (e) {}
+  function readPrefs() {
+    const margins = {};
+    marginIds.forEach((k) => {
+      const v = parseFloat(String($("#m-" + k).value).replace(",", "."));
+      margins[k] = isFinite(v) && v >= 0 ? Math.min(v, 10) : DEFAULT_MARGINS[k];
+    });
+    return { orientation: document.querySelector("input[name=orient]:checked").value, margins,
+      plain: optPlain.checked, fit: optFit.checked, font: optFont.checked };
+  }
+  document.querySelector(".page").addEventListener("change", () => {
+    try { localStorage.setItem(PREF_KEY, JSON.stringify(readPrefs())); } catch (e) {}
+  });
+  let downloadsP = null;
+  function downloads() {
+    if (!downloadsP) {
+      downloadsP = (window.claude && typeof window.claude.use === "function")
+        ? window.claude.use("downloads").catch(() => null)
+        : Promise.resolve(null);
+    }
+    return downloadsP;
+  }
+
+  $("#pick").addEventListener("click", (e) => { e.stopPropagation(); input.click(); });
+  drop.addEventListener("click", () => input.click());
+  drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } });
+  input.addEventListener("change", () => { addFiles(input.files); input.value = ""; });
+  ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => addFiles(e.dataTransfer.files));
+
+  function el(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
+
+  const bar = $("#queue-bar"), count = $("#queue-count");
+  function updateBar() {
+    const n = queue.children.length;
+    bar.hidden = n === 0;
+    count.textContent = "Оруулсан файл: " + n;
+  }
+  $("#clear-all").addEventListener("click", () => { queue.replaceChildren(); updateBar(); });
+
+  function addFiles(list) {
+    for (const f of list) addItem(f);
+  }
+
+  async function addItem(file) {
+    const item = el("div", "item");
+    const head = el("div", "item-head");
+    const name = el("div", "fname", file.name);
+    const state = el("span", "state wait", "Уншиж байна…");
+    const tools = el("div", "item-tools");
+    const remove = el("button", "remove", "✕ Устгах");
+    remove.type = "button";
+    remove.setAttribute("aria-label", file.name + " файлыг жагсаалтаас устгах");
+    remove.addEventListener("click", () => { item.remove(); updateBar(); });
+    tools.append(state, remove);
+    head.append(name, tools);
+    item.append(head);
+    queue.prepend(item);
+    updateBar();
+
+    if (!/\.(xlsx|xlsm)$/i.test(file.name)) {
+      state.className = "state err"; state.textContent = "Дэмжихгүй";
+      item.append(el("div", "note err", /\.xls$/i.test(file.name)
+        ? "Хуучин .xls файл байна. Excel-ээр нээгээд Save As → Excel Workbook (.xlsx) болгож хадгалаад дахин оруулна уу."
+        : "Зөвхөн .xlsx эсвэл .xlsm файл хөрвүүлнэ."));
+      return;
+    }
+    const buf = await file.arrayBuffer();
+    let names;
+    try { names = await window.excelToWord.sheetNames(buf.slice(0)); }
+    catch (e) {
+      state.className = "state err"; state.textContent = "Алдаа";
+      item.append(el("div", "note err", (e && e.message) ? e.message : "Файлыг уншиж чадсангүй."));
+      return;
+    }
+    state.textContent = names.length + " хуудас";
+    const sheets = el("div", "sheets");
+    const chosen = new Set(names);
+    const chips = {};
+    names.forEach((n) => {
+      const b = el("button", "sheet"); b.type = "button"; b.setAttribute("aria-pressed", "true");
+      b.append(el("span", null, n)); const pct = el("span", "pct"); b.append(pct); chips[n] = pct;
+      b.addEventListener("click", () => {
+        if (chosen.has(n)) { if (chosen.size > 1) chosen.delete(n); } else chosen.add(n);
+        b.setAttribute("aria-pressed", chosen.has(n) ? "true" : "false");
+      });
+      sheets.append(b);
+    });
+    const notes = el("div"); notes.style.display = "grid"; notes.style.gap = "8px";
+    const actions = el("div", "actions");
+    const go = el("button", "btn word", "Word болгож татах"); go.type = "button";
+    actions.append(go);
+    item.append(sheets, notes, actions);
+
+    go.addEventListener("click", async () => {
+      go.disabled = true; go.textContent = "Хөрвүүлж байна…"; notes.replaceChildren();
+      try {
+        const prefs = readPrefs();
+        const res = await window.excelToWord(buf.slice(0), {
+          fit: prefs.fit, scaleFonts: prefs.font, plainOutside: prefs.plain,
+          paper: "A4", orientation: prefs.orientation, margins: prefs.margins,
+          sheets: names.filter((n) => chosen.has(n)),
+        });
+        res.log.forEach((l) => {
+          if (chips[l.sheet]) chips[l.sheet].textContent = l.skipped ? "хоосон" : l.scale < 0.999 ? Math.round(l.scale * 100) + "%" : "";
+        });
+        if (res.missingFormula) {
+          notes.append(el("div", "note", res.missingFormula + " томьёоны үр дүн файлд хадгалагдаагүй тул хоосон гарлаа. " +
+            "Файлаа Excel-ээр нээгээд хадгалсны дараа дахин оруулбал утгууд гарна."));
+        }
+        const blob = await res.zip.generateAsync({ type: "blob", compression: "DEFLATE",
+          mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+        const outName = file.name.replace(/\.(xlsx|xlsm)$/i, "") + ".docx";
+        await save(outName, blob, notes);
+        state.className = "state done"; state.textContent = "Бэлэн";
+      } catch (e) {
+        state.className = "state err"; state.textContent = "Алдаа";
+        notes.append(el("div", "note err", "Хөрвүүлж чадсангүй: " + (e && e.message ? e.message : e)));
+      } finally {
+        go.disabled = false; go.textContent = "Word болгож татах";
+      }
+    });
+  }
+
+  async function save(filename, blob, notes) {
+    const dl = await downloads();
+    if (dl) {
+      try { await dl.save({ filename, data: blob }); return; }
+      catch (e) {
+        if (e && e.code === "declined") return;
+        if (e && e.code === "rate_limited") { notes.append(el("div", "note", "Татах цонх аль хэдийн нээлттэй байна.")); return; }
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+})();
+</script>
